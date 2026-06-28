@@ -117,10 +117,7 @@ class File_x_SEGA_Anima_RoPE(torch.nn.Module):
         self.frame = 0
         self.height = 64
         self.width = 64
-        if debug & 0b1000_0000 == 0:
-            self.build_freqs(1.0, 1.0, 1.0, debug)
-        else:
-            self.build_freqs_with_size(self.frame, self.height, self.width, 1.0, 1.0, 1.0, debug)
+        self.build_freqs_with_size(self.frame, self.height, self.width, 1.0, 1.0, 1.0, debug)
 
     @staticmethod
     def rope_params(index, dim, theta=10000, ntk_factor=1.0, debug=0b0):
@@ -132,53 +129,6 @@ class File_x_SEGA_Anima_RoPE(torch.nn.Module):
             freqs = torch.polar(torch.ones_like(freqs), freqs)
         return freqs
 
-    def build_freqs(self, ntk_t: float, ntk_h: float, ntk_w: float, debug:int):
-        """(Re)build pos/neg frequency tensors for the given per-axis NTK factors."""
-        pos_index = torch.arange(max(self.axes_dim), dtype=torch.float)
-        neg_index = torch.arange(max(self.axes_dim), dtype=torch.float).flip(0) * -1 - 1
-        self.pos_freqs = torch.cat(
-            [
-                self.rope_params(pos_index, self.axes_dim[0], self.theta, ntk_factor=ntk_t, debug=debug),
-                self.rope_params(pos_index, self.axes_dim[1], self.theta, ntk_factor=ntk_h, debug=debug),
-                self.rope_params(pos_index, self.axes_dim[2], self.theta, ntk_factor=ntk_w, debug=debug),
-            ],
-            dim=1,
-        )
-        self.neg_freqs = torch.cat(
-            [
-                self.rope_params(neg_index, self.axes_dim[0], self.theta, ntk_factor=ntk_t, debug=debug),
-                self.rope_params(neg_index, self.axes_dim[1], self.theta, ntk_factor=ntk_h, debug=debug),
-                self.rope_params(neg_index, self.axes_dim[2], self.theta, ntk_factor=ntk_w, debug=debug),
-            ],
-            dim=1,
-        )
-
-        if ntk_t > 1.0:
-            scaled_theta_t = self.theta * ntk_t
-            temporal_dim = self.axes_dim[0]
-            self._inv_freqs_t = 1.0 / torch.pow(
-                scaled_theta_t, torch.arange(0, temporal_dim, 2).float().div(temporal_dim)
-            )
-        if ntk_h > 1.0:
-            scaled_theta_h = self.theta * ntk_h
-            spatial_dim = self.axes_dim[1]
-            self._inv_freqs_h = 1.0 / torch.pow(
-                scaled_theta_h, torch.arange(0, spatial_dim, 2).float().div(spatial_dim)
-            )
-        if ntk_w > 1.0:
-            scaled_theta_w = self.theta * ntk_w
-            spatial_dim = self.axes_dim[2]
-            self._inv_freqs_w = 1.0 / torch.pow(
-                scaled_theta_w, torch.arange(0, spatial_dim, 2).float().div(spatial_dim)
-            )
-
-        self.ntk_t = ntk_t
-        self.ntk_h = ntk_h
-        self.ntk_w = ntk_w
-
-        if hasattr(self, 'compute_condition_freqs'):
-            self.compute_condition_freqs.cache_clear()
-
     def build_freqs_with_size(self, frame, height, width, ntk_t: float, ntk_h: float, ntk_w: float, debug:int):
         """(Re)build pos/neg frequency tensors for the given per-axis NTK factors."""
         pos_index_frame = torch.arange(frame, dtype=torch.float)
@@ -188,22 +138,13 @@ class File_x_SEGA_Anima_RoPE(torch.nn.Module):
         neg_index_height = torch.arange(height, dtype=torch.float).flip(0) * -1 - 1
         neg_index_width = torch.arange(width, dtype=torch.float).flip(0) * -1 - 1
 
-        self.pos_freqs = torch.cat(
-            [
-                self.rope_params(pos_index_frame, self.axes_dim[0], self.theta, ntk_factor=ntk_t, debug=debug),
-                self.rope_params(pos_index_height, self.axes_dim[1], self.theta, ntk_factor=ntk_h, debug=debug),
-                self.rope_params(pos_index_width, self.axes_dim[2], self.theta, ntk_factor=ntk_w, debug=debug),
-            ],
-            dim=1,
-        )
-        self.neg_freqs = torch.cat(
-            [
-                self.rope_params(neg_index_frame, self.axes_dim[0], self.theta, ntk_factor=ntk_t, debug=debug),
-                self.rope_params(neg_index_height, self.axes_dim[1], self.theta, ntk_factor=ntk_h, debug=debug),
-                self.rope_params(neg_index_width, self.axes_dim[2], self.theta, ntk_factor=ntk_w, debug=debug),
-            ],
-            dim=1,
-        )
+        self.pos_freqs_t = self.rope_params(pos_index_frame, self.axes_dim[0], self.theta, ntk_factor=ntk_t, debug=debug)
+        self.pos_freqs_h = self.rope_params(pos_index_height, self.axes_dim[1], self.theta, ntk_factor=ntk_h, debug=debug)
+        self.pos_freqs_w = self.rope_params(pos_index_width, self.axes_dim[2], self.theta, ntk_factor=ntk_w, debug=debug)
+
+        self.neg_freqs_t = self.rope_params(neg_index_frame, self.axes_dim[0], self.theta, ntk_factor=ntk_t, debug=debug)
+        self.neg_freqs_h = self.rope_params(neg_index_height, self.axes_dim[1], self.theta, ntk_factor=ntk_h, debug=debug)
+        self.neg_freqs_w = self.rope_params(neg_index_width, self.axes_dim[2], self.theta, ntk_factor=ntk_w, debug=debug)
 
         if ntk_t > 1.0:
             scaled_theta_t = self.theta * ntk_t
@@ -239,10 +180,7 @@ class File_x_SEGA_Anima_RoPE(torch.nn.Module):
             abs(ntk_t - self.ntk_t) > 1e-8 or 
             abs(ntk_h - self.ntk_h) > 1e-8 or
             abs(ntk_w - self.ntk_w) > 1e-8):
-            if debug & 0x1000_0000 == 0:
-                self.build_freqs(ntk_t, ntk_h, ntk_w, debug)
-            else:
-                self.build_freqs_with_size(frame, height, width, ntk_t, ntk_h, ntk_w, debug)
+            self.build_freqs_with_size(frame, height, width, ntk_t, ntk_h, ntk_w, debug)
 
     @torch.no_grad()
     def compute_mscale(self, ntk_factor_t, ntk_factor_h, ntk_factor_w, mscale_spread,
@@ -352,38 +290,38 @@ class File_x_SEGA_Anima_RoPE(torch.nn.Module):
     @functools.lru_cache(maxsize=None)
     def compute_condition_freqs(self, frame: int, height: int, width: int, device: torch.device, debug: int):
         seq_lens = frame * height * width
-        pos_freqs = self.pos_freqs.to(device) if device is not None else self.pos_freqs
-        neg_freqs = self.neg_freqs.to(device) if device is not None else self.neg_freqs
-
-        step = 2 if debug & 0b1_0000 == 0 else 1
-        freqs_pos = pos_freqs.split([x // step for x in self.axes_dim], dim=1)
-        freqs_neg = neg_freqs.split([x // step for x in self.axes_dim], dim=1)
+        pos_freqs_t = self.pos_freqs_t.to(device) if device is not None else self.pos_freqs_t
+        pos_freqs_h = self.pos_freqs_h.to(device) if device is not None else self.pos_freqs_h
+        pos_freqs_w = self.pos_freqs_w.to(device) if device is not None else self.pos_freqs_w
+        neg_freqs_t = self.neg_freqs_t.to(device) if device is not None else self.neg_freqs_t
+        neg_freqs_h = self.neg_freqs_h.to(device) if device is not None else self.neg_freqs_h
+        neg_freqs_w = self.neg_freqs_w.to(device) if device is not None else self.neg_freqs_w
 
         if debug & 0b100_0000 == 0:
             # freqs_frame = freqs_neg[0][-1:].view(frame, 1, 1, -1).expand(frame, height, width, -1)
             if debug & 0b1000 != 0:
-                freqs_frame = torch.cat([freqs_neg[0][-(frame - frame // 2) :], freqs_pos[0][: frame // 2]], dim=0)
+                freqs_frame = torch.cat([neg_freqs_t[-(frame - frame // 2) :], pos_freqs_t[: frame // 2]], dim=0)
                 freqs_frame = freqs_frame.view(frame, 1, 1, -1).expand(frame, height, width, -1)
-                freqs_height = torch.cat([freqs_neg[1][-(height - height // 2) :], freqs_pos[1][: height // 2]], dim=0)
+                freqs_height = torch.cat([neg_freqs_h[-(height - height // 2) :], pos_freqs_h[: height // 2]], dim=0)
                 freqs_height = freqs_height.view(1, height, 1, -1).expand(frame, height, width, -1)
-                freqs_width = torch.cat([freqs_neg[2][-(width - width // 2) :], freqs_pos[2][: width // 2]], dim=0)
+                freqs_width = torch.cat([neg_freqs_w[-(width - width // 2) :], pos_freqs_w[: width // 2]], dim=0)
                 freqs_width = freqs_width.view(1, 1, width, -1).expand(frame, height, width, -1)
             else:
-                freqs_frame = freqs_pos[0][:frame].view(frame, 1, 1, -1).expand(frame, height, width, -1)
-                freqs_height = freqs_pos[1][:height].view(1, height, 1, -1).expand(frame, height, width, -1)
-                freqs_width = freqs_pos[2][:width].view(1, 1, width, -1).expand(frame, height, width, -1)
+                freqs_frame = pos_freqs_t[:frame].view(frame, 1, 1, -1).expand(frame, height, width, -1)
+                freqs_height = pos_freqs_h[:height].view(1, height, 1, -1).expand(frame, height, width, -1)
+                freqs_width = pos_freqs_w[:width].view(1, 1, width, -1).expand(frame, height, width, -1)
 
             freqs = torch.cat([freqs_frame, freqs_height, freqs_width], dim=-1).reshape(seq_lens, -1)
             return freqs.clone().contiguous()
         else:
             if debug & 0b1000 != 0:
-                freqs_frame = torch.cat([freqs_neg[0][-(frame - frame // 2) :], freqs_pos[0][: frame // 2]], dim=0)
-                freqs_height = torch.cat([freqs_neg[1][-(height - height // 2) :], freqs_pos[1][: height // 2]], dim=0)
-                freqs_width = torch.cat([freqs_neg[2][-(width - width // 2) :], freqs_pos[2][: width // 2]], dim=0)
+                freqs_frame = torch.cat([neg_freqs_t[-(frame - frame // 2) :], pos_freqs_t[: frame // 2]], dim=0)
+                freqs_height = torch.cat([neg_freqs_h[-(height - height // 2) :], pos_freqs_h[: height // 2]], dim=0)
+                freqs_width = torch.cat([neg_freqs_w[-(width - width // 2) :], pos_freqs_w[: width // 2]], dim=0)
             else:
-                freqs_frame = freqs_pos[0][:frame]
-                freqs_height = freqs_pos[1][:height]
-                freqs_width = freqs_pos[2][:width]
+                freqs_frame = pos_freqs_t[:frame]
+                freqs_height = pos_freqs_h[:height]
+                freqs_width = pos_freqs_w[:width]
 
             freqs_frame = torch.stack([freqs_frame.cos(), -freqs_frame.sin(), freqs_frame.sin(), freqs_frame.cos()], dim=-1)
             freqs_height = torch.stack([freqs_height.cos(), -freqs_height.sin(), freqs_height.sin(), freqs_height.cos()], dim=-1)
@@ -419,10 +357,12 @@ class File_x_SEGA_Anima_RoPE(torch.nn.Module):
         video_freq = self.compute_condition_freqs(frame, height, width, device, debug)
         mscale = self.compute_mscale(ntk_t, ntk_h, ntk_w, mscale_spread, energy_profile_h, energy_profile_w, energy_profile_t, target_resolution_h, target_resolution_w, device)
         if mscale is not None:
-            if debug & 0b100_0000 == 0:
+            if debug & 0b100_0000 == 0 and debug & 0b1_0000_0000 == 0:
                 return video_freq * mscale
-            else:
+            elif debug & 0b100_0000 == 1 and debug & 0b1_0000_0000 == 0:
                 return video_freq * mscale.unsqueeze(-1)
+            else:
+                return video_freq * mscale.unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
         else:
             return video_freq
 
@@ -633,96 +573,6 @@ def compute_dynamic_spread(energy_profile, spread_min=0.0, spread_max=1.0, alpha
     flatness = (geo_mean / (arith_mean + eps)).clamp(0.0, 1.0)
     concentration = 1.0 - flatness.item()
     return spread_min + (spread_max - spread_min) * (1.0 - (1.0 - concentration) ** alpha)
-
-def prepare_embedded_sequence_old(
-    class_obj: MiniTrainDIT,
-    x_B_C_T_H_W: torch.Tensor,
-    fps: Optional[torch.Tensor] = None,
-    padding_mask: Optional[torch.Tensor] = None,
-    h_ntk_factor: Optional[float] = None,
-    w_ntk_factor: Optional[float] = None,
-    t_ntk_factor: Optional[float] = None,
-    target_res: Optional[int] = None, 
-    training_res: Optional[int] = None, 
-    base_mscale_formula: str = "power_res",
-    base_mscale_coefficient: Optional[float] = None,
-    h_energy_profile: Optional[torch.Tensor] = None,
-    w_energy_profile: Optional[torch.Tensor] = None,
-    t_energy_profile: Optional[torch.Tensor] = None,
-    mscale_spread: Optional[float] = None,
-    mscale_alpha: float = 0.15,
-    mscale_beta: float = 1.5,
-    mscale_min: float = 1.0,
-    debug: int = 0b0,
-) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
-    """
-    Prepares an embedded sequence tensor by applying positional embeddings and handling padding masks.
-
-    Args:
-        x_B_C_T_H_W (torch.Tensor): video
-        fps (Optional[torch.Tensor]): Frames per second tensor to be used for positional embedding when required.
-                                If None, a default value (`class_obj.base_fps`) will be used.
-        padding_mask (Optional[torch.Tensor]): current it is not used
-
-    Returns:
-        Tuple[torch.Tensor, Optional[torch.Tensor]]:
-            - A tensor of shape (B, T, H, W, D) with the embedded sequence.
-            - An optional positional embedding tensor, returned only if the positional embedding class
-            (`class_obj.pos_emb_cls`) includes 'rope'. Otherwise, None.
-
-    Notes:
-        - If `class_obj.concat_padding_mask` is True, a padding mask channel is concatenated to the input tensor.
-        - The method of applying positional embeddings depends on the value of `class_obj.pos_emb_cls`.
-        - If 'rope' is in `class_obj.pos_emb_cls` (case insensitive), the positional embeddings are generated using
-            the `class_obj.pos_embedder` with the shape [T, H, W].
-        - If "fps_aware" is in `class_obj.pos_emb_cls`, the positional embeddings are generated using the
-        `class_obj.pos_embedder` with the fps tensor.
-        - Otherwise, the positional embeddings are generated without considering fps.
-    """
-    if class_obj.concat_padding_mask:
-        if padding_mask is None:
-            padding_mask = torch.zeros(x_B_C_T_H_W.shape[0], 1, x_B_C_T_H_W.shape[3], x_B_C_T_H_W.shape[4], dtype=x_B_C_T_H_W.dtype, device=x_B_C_T_H_W.device)
-        else:
-            padding_mask = transforms.functional.resize(
-                padding_mask, list(x_B_C_T_H_W.shape[-2:]), interpolation=transforms.InterpolationMode.NEAREST
-            )
-        x_B_C_T_H_W = torch.cat(
-            [x_B_C_T_H_W, padding_mask.unsqueeze(1).repeat(1, 1, x_B_C_T_H_W.shape[2], 1, 1)], dim=1
-        )
-    x_B_T_H_W_D = class_obj.x_embedder(x_B_C_T_H_W)
-
-    if class_obj.extra_per_block_abs_pos_emb:
-        extra_pos_emb = class_obj.extra_pos_embedder(x_B_T_H_W_D, fps=fps, device=x_B_C_T_H_W.device, dtype=x_B_C_T_H_W.dtype)
-    else:
-        extra_pos_emb = None
-
-    # inside of this is likely wrong
-    if "rope" in class_obj.pos_emb_cls.lower():
-        rope_emb_L_1_1_D = generate_embeddings(
-            class_obj = class_obj.pos_embedder,
-            B_T_H_W_C = x_B_T_H_W_D,
-            fps = fps,
-            h_ntk_factor = h_ntk_factor,
-            w_ntk_factor = w_ntk_factor, 
-            t_ntk_factor = t_ntk_factor, 
-            device = x_B_C_T_H_W.device,
-            target_res = target_res,
-            training_res = training_res,
-            base_mscale_formula = base_mscale_formula,
-            base_mscale_coefficient = base_mscale_coefficient,
-            h_energy_profile = h_energy_profile,
-            w_energy_profile = w_energy_profile,
-            t_energy_profile = t_energy_profile,
-            mscale_spread = mscale_spread,
-            mscale_alpha = mscale_alpha,
-            mscale_beta = mscale_beta,
-            mscale_min = mscale_min,
-            debug = debug,
-            )
-        return x_B_T_H_W_D, rope_emb_L_1_1_D, extra_pos_emb
-    x_B_T_H_W_D = x_B_T_H_W_D + class_obj.pos_embedder(x_B_T_H_W_D, device=x_B_C_T_H_W.device)  # [B, T, H, W, D]
-
-    return x_B_T_H_W_D, None, extra_pos_emb
 
 def prepare_embedded_sequence(
     class_obj: MiniTrainDIT,
