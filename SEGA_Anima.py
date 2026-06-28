@@ -124,8 +124,7 @@ class File_x_SEGA_Anima_RoPE(torch.nn.Module):
         assert dim % 2 == 0
         scaled_theta = theta * ntk_factor
         freqs = torch.outer(index, 1.0 / torch.pow(scaled_theta, torch.arange(0, dim, 2).to(torch.float32).div(dim)))
-        if debug & 0b10_0000 == 0:  # must be skipped
-            freqs = torch.polar(torch.ones_like(freqs), freqs)
+        # freqs = torch.polar(torch.ones_like(freqs), freqs)
         return freqs
 
     def build_freqs_with_size(self, frame, height, width, ntk_t: float, ntk_h: float, ntk_w: float, debug:int):
@@ -145,24 +144,23 @@ class File_x_SEGA_Anima_RoPE(torch.nn.Module):
         self.neg_freqs_h = self.rope_params(neg_index_height, self.axes_dim[1], self.theta, ntk_factor=ntk_h, debug=debug)
         self.neg_freqs_w = self.rope_params(neg_index_width, self.axes_dim[2], self.theta, ntk_factor=ntk_w, debug=debug)
 
-        step = 2 if debug & 0b100_0000_0000 == 0 else 1
         if ntk_t > 1.0:
             scaled_theta_t = self.theta * ntk_t
             temporal_dim = self.axes_dim[0]
             self._inv_freqs_t = 1.0 / torch.pow(
-                scaled_theta_t, torch.arange(0, temporal_dim, step).float().div(temporal_dim)
+                scaled_theta_t, torch.arange(0, temporal_dim, 2).float().div(temporal_dim)
             )
         if ntk_h > 1.0:
             scaled_theta_h = self.theta * ntk_h
             spatial_dim = self.axes_dim[1]
             self._inv_freqs_h = 1.0 / torch.pow(
-                scaled_theta_h, torch.arange(0, spatial_dim, step).float().div(spatial_dim)
+                scaled_theta_h, torch.arange(0, spatial_dim, 2).float().div(spatial_dim)
             )
         if ntk_w > 1.0:
             scaled_theta_w = self.theta * ntk_w
             spatial_dim = self.axes_dim[2]
             self._inv_freqs_w = 1.0 / torch.pow(
-                scaled_theta_w, torch.arange(0, spatial_dim, step).float().div(spatial_dim)
+                scaled_theta_w, torch.arange(0, spatial_dim, 2).float().div(spatial_dim)
             )
 
         self.ntk_t = ntk_t
@@ -192,8 +190,6 @@ class File_x_SEGA_Anima_RoPE(torch.nn.Module):
         """
         if (ntk_factor_h <= 1.0 and ntk_factor_w <= 1.0) or mscale_spread is None:
             return None
-        
-        step = 2 if debug & 0b100_0000_0000 == 0 else 1
 
         # temporal axis SEGA
         if ntk_factor_t > 1.0 and hasattr(self, '_inv_freqs_t'):
@@ -204,7 +200,7 @@ class File_x_SEGA_Anima_RoPE(torch.nn.Module):
                 self.base_mscale_coefficient,
             )
             dev = device or self._inv_freqs_t.device
-            mscale_t = torch.full((self.axes_dim[0] // step,), base_ms_t,
+            mscale_t = torch.full((self.axes_dim[0] // 2,), base_ms_t,
                                        device=dev, dtype=torch.float32)
         else:
             mscale_t = None
@@ -231,7 +227,7 @@ class File_x_SEGA_Anima_RoPE(torch.nn.Module):
                 )
             else:
                 dev = device or self._inv_freqs_h.device
-                mscale_h = torch.full((self.axes_dim[1] // step,), base_ms_h,
+                mscale_h = torch.full((self.axes_dim[1] // 2,), base_ms_h,
                                        device=dev, dtype=torch.float32)
         else:
             mscale_h = None
@@ -258,7 +254,7 @@ class File_x_SEGA_Anima_RoPE(torch.nn.Module):
                 )
             else:
                 dev = device or self._inv_freqs_w.device
-                mscale_w = torch.full((self.axes_dim[2] // step,), base_ms_w,
+                mscale_w = torch.full((self.axes_dim[2] // 2,), base_ms_w,
                                        device=dev, dtype=torch.float32)
         else:
             mscale_w = None
@@ -268,11 +264,11 @@ class File_x_SEGA_Anima_RoPE(torch.nn.Module):
 
         dev = device or (mscale_h.device if mscale_h is not None else mscale_w.device)
         if mscale_t is None:
-            mscale_t = torch.ones(self.axes_dim[0] // step, device=dev)
+            mscale_t = torch.ones(self.axes_dim[0] // 2, device=dev)
         if mscale_h is None:
-            mscale_h = torch.ones(self.axes_dim[1] // step, device=dev)
+            mscale_h = torch.ones(self.axes_dim[1] // 2, device=dev)
         if mscale_w is None:
-            mscale_w = torch.ones(self.axes_dim[2] // step, device=dev)
+            mscale_w = torch.ones(self.axes_dim[2] // 2, device=dev)
 
         mscale_full = torch.cat([
             mscale_t,
@@ -299,45 +295,23 @@ class File_x_SEGA_Anima_RoPE(torch.nn.Module):
         neg_freqs_h = self.neg_freqs_h.to(device) if device is not None else self.neg_freqs_h
         neg_freqs_w = self.neg_freqs_w.to(device) if device is not None else self.neg_freqs_w
 
-        if debug & 0b10_0000_0000 == 0:
-            # freqs_frame = freqs_neg[0][-1:].view(frame, 1, 1, -1).expand(frame, height, width, -1)
-            if debug & 0b1000 != 0:
-                freqs_frame = torch.cat([neg_freqs_t[-(frame - frame // 2) :], pos_freqs_t[: frame // 2]], dim=0)
-                freqs_frame = freqs_frame.view(frame, 1, 1, -1).expand(frame, height, width, -1)
-                freqs_height = torch.cat([neg_freqs_h[-(height - height // 2) :], pos_freqs_h[: height // 2]], dim=0)
-                freqs_height = freqs_height.view(1, height, 1, -1).expand(frame, height, width, -1)
-                freqs_width = torch.cat([neg_freqs_w[-(width - width // 2) :], pos_freqs_w[: width // 2]], dim=0)
-                freqs_width = freqs_width.view(1, 1, width, -1).expand(frame, height, width, -1)
-            else:
-                freqs_frame = pos_freqs_t[:frame].view(frame, 1, 1, -1).expand(frame, height, width, -1)
-                freqs_height = pos_freqs_h[:height].view(1, height, 1, -1).expand(frame, height, width, -1)
-                freqs_width = pos_freqs_w[:width].view(1, 1, width, -1).expand(frame, height, width, -1)
+        freqs_frame = pos_freqs_t[:frame]
+        freqs_height = pos_freqs_h[:height]
+        freqs_width = pos_freqs_w[:width]
 
-            freqs = torch.cat([freqs_frame, freqs_height, freqs_width], dim=-1).reshape(seq_lens, -1)
-            return freqs.clone().contiguous()
-        else:
-            if debug & 0b1000 != 0:
-                freqs_frame = torch.cat([neg_freqs_t[-(frame - frame // 2) :], pos_freqs_t[: frame // 2]], dim=0)
-                freqs_height = torch.cat([neg_freqs_h[-(height - height // 2) :], pos_freqs_h[: height // 2]], dim=0)
-                freqs_width = torch.cat([neg_freqs_w[-(width - width // 2) :], pos_freqs_w[: width // 2]], dim=0)
-            else:
-                freqs_frame = pos_freqs_t[:frame]
-                freqs_height = pos_freqs_h[:height]
-                freqs_width = pos_freqs_w[:width]
+        freqs_frame = torch.stack([freqs_frame.cos(), -freqs_frame.sin(), freqs_frame.sin(), freqs_frame.cos()], dim=-1)
+        freqs_height = torch.stack([freqs_height.cos(), -freqs_height.sin(), freqs_height.sin(), freqs_height.cos()], dim=-1)
+        freqs_width = torch.stack([freqs_width.cos(), -freqs_width.sin(), freqs_width.sin(), freqs_width.cos()], dim=-1)
 
-            freqs_frame = torch.stack([freqs_frame.cos(), -freqs_frame.sin(), freqs_frame.sin(), freqs_frame.cos()], dim=-1)
-            freqs_height = torch.stack([freqs_height.cos(), -freqs_height.sin(), freqs_height.sin(), freqs_height.cos()], dim=-1)
-            freqs_width = torch.stack([freqs_width.cos(), -freqs_width.sin(), freqs_width.sin(), freqs_width.cos()], dim=-1)
-
-            em_T_H_W_D = torch.cat(
-                [
-                    repeat(freqs_frame, "t d x -> t h w d x", h=height, w=width),
-                    repeat(freqs_height, "h d x -> t h w d x", t=frame, w=width),
-                    repeat(freqs_width, "w d x -> t h w d x", t=frame, h=height),
-                ]
-                , dim=-2,
-            )
-            return rearrange(em_T_H_W_D, "t h w d (i j) -> (t h w) d i j", i=2, j=2).float()
+        em_T_H_W_D = torch.cat(
+            [
+                repeat(freqs_frame, "t d x -> t h w d x", h=height, w=width),
+                repeat(freqs_height, "h d x -> t h w d x", t=frame, w=width),
+                repeat(freqs_width, "w d x -> t h w d x", t=frame, h=height),
+            ]
+            , dim=-2,
+        )
+        return rearrange(em_T_H_W_D, "t h w d (i j) -> (t h w) d i j", i=2, j=2).float()
 
     def forward(
         self, 
@@ -371,12 +345,7 @@ class File_x_SEGA_Anima_RoPE(torch.nn.Module):
             debug=debug
             )
         if mscale is not None:
-            if debug & 0b100_0000 == 0 and debug & 0b1_0000_0000 == 0:
-                return video_freq * mscale
-            elif debug & 0b100_0000 == 1 and debug & 0b1_0000_0000 == 0:
-                return video_freq * mscale.unsqueeze(-1)
-            else:
-                return video_freq * mscale.unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
+            return video_freq * mscale.unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
         else:
             return video_freq
 
@@ -499,6 +468,8 @@ def prepare_embedded_sequence(
         training_resolution_h: int = state.get("training_resolution_h", 1024)
         training_resolution_w: int = state.get("training_resolution_w", 1024)
         debug: int = state.get("debug", 0)
+        d_mul: float = state.get("debug", 0)
+        log_s_mul: float = state.get("debug", 0)
         axes_dims_rope: tuple[int, int, int] = state.get("axes_dims_rope", (44, 42, 42))
         rope_embedder: File_x_SEGA_Anima_RoPE = state.get("RoPE_Embedder", None)
         
@@ -513,8 +484,6 @@ def prepare_embedded_sequence(
         s_w = target_resolution_w / training_resolution_w
         d_h = axes_dims_rope[1]
         d_w = axes_dims_rope[2]
-        d_mul = 2 if debug & 0b1 == 0 else 1
-        log_s_mul = 1.0 if debug & 0b10 == 0 else 0.1
         ntk_h = s_h ** (d_mul * d_h / (d_h - 2)) / (1 + log_s_mul * math.log(s_h))
         ntk_w = s_w ** (d_mul * d_w / (d_w - 2)) / (1 + log_s_mul * math.log(s_w))
         big = max(float(s_h), float(s_w))
@@ -637,22 +606,24 @@ class File_x_SEGA_Anima_(io.ComfyNode):
     def define_schema(cls):
         return io.Schema(node_id="File_x SEGA Anima",
                          display_name="SEGA Anima",
-                         category="File_x/SEGA",
+                         category="SEGA/Anima",
                          inputs=[io.Model.Input(id="model"),
-                                 io.Int.Input(id="training_resolution_h", default=1024, min=16, max=65536, step=8),
-                                 io.Int.Input(id="training_resolution_w", default=1024, min=16, max=65536, step=8),
-                                 io.Float.Input(id="theta", default=10000.0, min=-0, max=100000.0, step=0.001),
+                                 io.Int.Input(id="training_resolution", default=1024, min=1, max=65536, step=1),
+                                 io.Float.Input(id="theta", default=10000.0, min=-100000.0, max=100000.0, step=0.001),
                                  io.Combo.Input(id="base_mscale_formula", options=["power_res", "log_res"], default="power_res"),
                                  io.Float.Input(id="base_mscale_coefficient", default=0.08, min=-100.000, max=100.000, step=0.001),
                                  io.Float.Input(id="mscale_alpha", default=0.15, min=-100.000, max=100.000, step=0.001),
                                  io.Float.Input(id="mscale_beta", default=1.5, min=-100.000, max=100.000, step=0.001),
                                  io.Float.Input(id="mscale_min", default=1.0, min=-100.000, max=100.000, step=0.001),
-                                 io.Int.Input(id="debug", default=0b0, min=0, max=0b1111_1111_1111_1111, step=1, advanced=True),],
+                                 io.Float.Input(id="d_mul", default=2.0, min=-100.000, max=100.000, step=0.001),
+                                 io.Float.Input(id="log_s_mul", default=0.1, min=-100.000, max=100.000, step=0.001),
+                                 # io.Int.Input(id="debug", default=0b0, min=0, max=0b1111_1111_1111_1111, step=1, advanced=True),
+                                 ],
                          outputs=[io.Model.Output(id=None),],)
     
     @classmethod
-    def execute(cls, model: ModelPatcher, training_resolution_h, training_resolution_w, theta, base_mscale_formula, base_mscale_coefficient, 
-                mscale_alpha, mscale_beta, mscale_min, debug):
+    def execute(cls, model: ModelPatcher, training_resolution, theta, base_mscale_formula, base_mscale_coefficient, 
+                mscale_alpha, mscale_beta, mscale_min, d_mul, log_s_mul):
         base_model = getattr(model, "model", None)
         if base_model is None:
             raise RuntimeError("Model input has no model object.")
@@ -675,12 +646,14 @@ class File_x_SEGA_Anima_(io.ComfyNode):
         modified_model.remove_wrappers_with_key(WrappersMP.DIFFUSION_MODEL, File_x_SEGA_Anima_key)
         transformer_options = modified_model.model_options.setdefault("transformer_options", {})
         transformer_options[File_x_SEGA_Anima_state] = {
-            "training_resolution_h": training_resolution_h,
-            "training_resolution_w": training_resolution_w,
-            "debug": debug,
+            "training_resolution_h": training_resolution,
+            "training_resolution_w": training_resolution,
+            "debug": 0b0,
+            "d_mul": d_mul,
+            "log_s_mul": log_s_mul,
             "axes_dims_rope": axes_dims_rope,
             "RoPE_Embedder": File_x_SEGA_Anima_RoPE(axes_dims_rope, theta, base_mscale_formula, base_mscale_coefficient, 
-                                                    training_resolution_h, training_resolution_w, mscale_alpha, mscale_beta, mscale_min, debug)
+                                                    training_resolution, training_resolution, mscale_alpha, mscale_beta, mscale_min, 0b0)
         }
         modified_model.add_wrapper_with_key(WrappersMP.DIFFUSION_MODEL, File_x_SEGA_Anima_key, File_x_SEGA_Anima_wrapper)
         return io.NodeOutput(modified_model)
