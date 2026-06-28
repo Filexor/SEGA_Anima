@@ -123,9 +123,8 @@ class File_x_SEGA_Anima_RoPE(torch.nn.Module):
     def rope_params(index, dim, theta=10000, ntk_factor=1.0, debug=0b0):
         assert dim % 2 == 0
         scaled_theta = theta * ntk_factor
-        step = 2 if debug & 0b1_0000 == 0 else 1
-        freqs = torch.outer(index, 1.0 / torch.pow(scaled_theta, torch.arange(0, dim, step).to(torch.float32).div(dim)))
-        if debug & 0b10_0000 == 0:
+        freqs = torch.outer(index, 1.0 / torch.pow(scaled_theta, torch.arange(0, dim, 2).to(torch.float32).div(dim)))
+        if debug & 0b10_0000 == 0:  # must be skipped
             freqs = torch.polar(torch.ones_like(freqs), freqs)
         return freqs
 
@@ -146,23 +145,24 @@ class File_x_SEGA_Anima_RoPE(torch.nn.Module):
         self.neg_freqs_h = self.rope_params(neg_index_height, self.axes_dim[1], self.theta, ntk_factor=ntk_h, debug=debug)
         self.neg_freqs_w = self.rope_params(neg_index_width, self.axes_dim[2], self.theta, ntk_factor=ntk_w, debug=debug)
 
+        step = 2 if debug & 0b100_0000_0000 == 0 else 1
         if ntk_t > 1.0:
             scaled_theta_t = self.theta * ntk_t
             temporal_dim = self.axes_dim[0]
             self._inv_freqs_t = 1.0 / torch.pow(
-                scaled_theta_t, torch.arange(0, temporal_dim, 2).float().div(temporal_dim)
+                scaled_theta_t, torch.arange(0, temporal_dim, step).float().div(temporal_dim)
             )
         if ntk_h > 1.0:
             scaled_theta_h = self.theta * ntk_h
             spatial_dim = self.axes_dim[1]
             self._inv_freqs_h = 1.0 / torch.pow(
-                scaled_theta_h, torch.arange(0, spatial_dim, 2).float().div(spatial_dim)
+                scaled_theta_h, torch.arange(0, spatial_dim, step).float().div(spatial_dim)
             )
         if ntk_w > 1.0:
             scaled_theta_w = self.theta * ntk_w
             spatial_dim = self.axes_dim[2]
             self._inv_freqs_w = 1.0 / torch.pow(
-                scaled_theta_w, torch.arange(0, spatial_dim, 2).float().div(spatial_dim)
+                scaled_theta_w, torch.arange(0, spatial_dim, step).float().div(spatial_dim)
             )
 
         self.ntk_t = ntk_t
@@ -184,14 +184,16 @@ class File_x_SEGA_Anima_RoPE(torch.nn.Module):
 
     @torch.no_grad()
     def compute_mscale(self, ntk_factor_t, ntk_factor_h, ntk_factor_w, mscale_spread,
-                       t_energy_profile=None, energy_profile_h=None, energy_profile_w=None,
-                       target_res_h=None, target_res_w=None, device=None):
+                       energy_profile_t=None, energy_profile_h=None, energy_profile_w=None,
+                       target_res_h=None, target_res_w=None, device=None, debug=0b0):
         """
         Compute per-frequency-dimension mscale with SEGA (Spectral-Energy Guided Attention).
         Returns None if no scaling needed, otherwise [D_total/2] real tensor.
         """
         if (ntk_factor_h <= 1.0 and ntk_factor_w <= 1.0) or mscale_spread is None:
             return None
+        
+        step = 2 if debug & 0b100_0000_0000 == 0 else 1
 
         # temporal axis SEGA
         if ntk_factor_t > 1.0 and hasattr(self, '_inv_freqs_t'):
@@ -202,7 +204,7 @@ class File_x_SEGA_Anima_RoPE(torch.nn.Module):
                 self.base_mscale_coefficient,
             )
             dev = device or self._inv_freqs_t.device
-            mscale_t = torch.full((self.axes_dim[0] // 2,), base_ms_t,
+            mscale_t = torch.full((self.axes_dim[0] // step,), base_ms_t,
                                        device=dev, dtype=torch.float32)
         else:
             mscale_t = None
@@ -229,7 +231,7 @@ class File_x_SEGA_Anima_RoPE(torch.nn.Module):
                 )
             else:
                 dev = device or self._inv_freqs_h.device
-                mscale_h = torch.full((self.axes_dim[1] // 2,), base_ms_h,
+                mscale_h = torch.full((self.axes_dim[1] // step,), base_ms_h,
                                        device=dev, dtype=torch.float32)
         else:
             mscale_h = None
@@ -256,7 +258,7 @@ class File_x_SEGA_Anima_RoPE(torch.nn.Module):
                 )
             else:
                 dev = device or self._inv_freqs_w.device
-                mscale_w = torch.full((self.axes_dim[2] // 2,), base_ms_w,
+                mscale_w = torch.full((self.axes_dim[2] // step,), base_ms_w,
                                        device=dev, dtype=torch.float32)
         else:
             mscale_w = None
@@ -266,11 +268,11 @@ class File_x_SEGA_Anima_RoPE(torch.nn.Module):
 
         dev = device or (mscale_h.device if mscale_h is not None else mscale_w.device)
         if mscale_t is None:
-            mscale_t = torch.ones(self.axes_dim[0] // 2, device=dev)
+            mscale_t = torch.ones(self.axes_dim[0] // step, device=dev)
         if mscale_h is None:
-            mscale_h = torch.ones(self.axes_dim[1] // 2, device=dev)
+            mscale_h = torch.ones(self.axes_dim[1] // step, device=dev)
         if mscale_w is None:
-            mscale_w = torch.ones(self.axes_dim[2] // 2, device=dev)
+            mscale_w = torch.ones(self.axes_dim[2] // step, device=dev)
 
         mscale_full = torch.cat([
             mscale_t,
@@ -297,7 +299,7 @@ class File_x_SEGA_Anima_RoPE(torch.nn.Module):
         neg_freqs_h = self.neg_freqs_h.to(device) if device is not None else self.neg_freqs_h
         neg_freqs_w = self.neg_freqs_w.to(device) if device is not None else self.neg_freqs_w
 
-        if debug & 0b100_0000 == 0:
+        if debug & 0b10_0000_0000 == 0:
             # freqs_frame = freqs_neg[0][-1:].view(frame, 1, 1, -1).expand(frame, height, width, -1)
             if debug & 0b1000 != 0:
                 freqs_frame = torch.cat([neg_freqs_t[-(frame - frame // 2) :], pos_freqs_t[: frame // 2]], dim=0)
@@ -344,9 +346,9 @@ class File_x_SEGA_Anima_RoPE(torch.nn.Module):
         ntk_h: float = 1.0, 
         ntk_w: float = 1.0, 
         mscale_spread: Optional[float] = None,
+        energy_profile_t: Optional[torch.Tensor] = None,
         energy_profile_h: Optional[torch.Tensor] = None,
         energy_profile_w: Optional[torch.Tensor] = None,
-        energy_profile_t: Optional[torch.Tensor] = None,
         target_resolution_h: Optional[int] = None,
         target_resolution_w: Optional[int] = None,
         debug: int = 0b0
@@ -355,7 +357,19 @@ class File_x_SEGA_Anima_RoPE(torch.nn.Module):
         _, frame, height, width, _ = x_B_T_H_W_D.shape
         self.ensure_ntk_factor(frame, height, width, ntk_t, ntk_h, ntk_w, debug)
         video_freq = self.compute_condition_freqs(frame, height, width, device, debug)
-        mscale = self.compute_mscale(ntk_t, ntk_h, ntk_w, mscale_spread, energy_profile_h, energy_profile_w, energy_profile_t, target_resolution_h, target_resolution_w, device)
+        mscale = self.compute_mscale(
+            ntk_factor_t=ntk_t, 
+            ntk_factor_h=ntk_h, 
+            ntk_factor_w=ntk_w, 
+            mscale_spread=mscale_spread,
+            energy_profile_t=energy_profile_t, 
+            energy_profile_h=energy_profile_h, 
+            energy_profile_w=energy_profile_w, 
+            target_res_h=target_resolution_h, 
+            target_res_w=target_resolution_w, 
+            device=device,
+            debug=debug
+            )
         if mscale is not None:
             if debug & 0b100_0000 == 0 and debug & 0b1_0000_0000 == 0:
                 return video_freq * mscale
@@ -365,150 +379,6 @@ class File_x_SEGA_Anima_RoPE(torch.nn.Module):
                 return video_freq * mscale.unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
         else:
             return video_freq
-
-def compute_effective_mscale(
-    dim_range: torch.Tensor,
-    ntk_factor: float = 1.0,
-    target_res: Optional[int] = None, 
-    training_res: Optional[int] = None, 
-    base_mscale_formula: str = "power_res",
-    base_mscale_coefficient: Optional[float] = None,
-    energy_profile: Optional[torch.Tensor] = None,
-    mscale_spread: Optional[float] = None,
-    mscale_alpha: float = 0.15,
-    mscale_beta: float = 1.5,
-    mscale_min: float = 1.0,
-) -> tuple[Union[float, torch.Tensor], torch.Tensor]: 
-    
-    theta = 10000.0
-    inv_freq = 1.0 / (theta ** dim_range)
-    effective_mscale: Union[float, torch.Tensor] = 1.0
-
-    if ntk_factor > 1.0:
-        scaled_theta = theta * ntk_factor
-        freqs = 1.0 / (scaled_theta ** dim_range)
-
-        base_ms = compute_base_mscale(
-            target_res=target_res,
-            training_res=training_res,
-            formula=base_mscale_formula,
-            coefficient=base_mscale_coefficient,
-        )
-
-        use_sega = (
-            energy_profile is not None
-            and mscale_spread is not None
-            and float(mscale_spread) > 0.0
-            and base_ms > 1.0 + 1e-8
-        )
-
-        if use_sega:
-            return compute_sega_allocation(
-                energy_profile=energy_profile,
-                freqs=freqs,
-                base_mscale=base_ms,
-                spread=float(mscale_spread),
-                alpha=float(mscale_alpha),
-                beta=float(mscale_beta),
-                min_mscale=float(mscale_min),
-            ), freqs
-        else:
-            return base_ms, freqs
-    else:
-        return effective_mscale, inv_freq
-
-def generate_embeddings_old(
-    class_obj: VideoRopePosition3DEmb,
-    B_T_H_W_C: torch.Tensor,
-    fps: Optional[torch.Tensor] = None,
-    h_ntk_factor: Optional[float] = None,
-    w_ntk_factor: Optional[float] = None,
-    t_ntk_factor: Optional[float] = None,
-    device=None,
-    dtype=None,
-    target_res: Optional[int] = None, 
-    training_res: Optional[int] = None, 
-    base_mscale_formula: str = "power_res",
-    base_mscale_coefficient: Optional[float] = None,
-    h_energy_profile: Optional[torch.Tensor] = None,
-    w_energy_profile: Optional[torch.Tensor] = None,
-    t_energy_profile: Optional[torch.Tensor] = None,
-    mscale_spread: Optional[float] = None,
-    mscale_alpha: float = 0.15,
-    mscale_beta: float = 1.5,
-    mscale_min: float = 1.0,
-    debug: int = 0b0,
-):
-    """
-    Generate embeddings for the given input size.
-
-    Args:
-        B_T_H_W_C (torch.Size): Input tensor size (Batch, Time, Height, Width, Channels).
-        fps (Optional[torch.Tensor], optional): Frames per second. Defaults to None.
-        h_ntk_factor (Optional[float], optional): Height NTK factor. If None, uses class_obj.h_ntk_factor.
-        w_ntk_factor (Optional[float], optional): Width NTK factor. If None, uses class_obj.w_ntk_factor.
-        t_ntk_factor (Optional[float], optional): Time NTK factor. If None, uses class_obj.t_ntk_factor.
-
-    Returns:
-        Not specified in the original code snippet.
-    """
-    # this is where incorrect: ntk_factors are normally None.
-    h_ntk_factor = None if debug & 0b1_0000_0000 else h_ntk_factor
-    w_ntk_factor = None if debug & 0b10_0000_0000 else w_ntk_factor
-    t_ntk_factor = None if debug & 0b100_0000_0000 else t_ntk_factor
-    h_ntk_factor = h_ntk_factor if h_ntk_factor is not None else class_obj.h_ntk_factor
-    w_ntk_factor = w_ntk_factor if w_ntk_factor is not None else class_obj.w_ntk_factor
-    t_ntk_factor = t_ntk_factor if t_ntk_factor is not None else class_obj.t_ntk_factor
-
-    h_effective_mscale, h_spatial_freqs = compute_effective_mscale(class_obj.dim_spatial_range.to(device=device), h_ntk_factor, target_res, training_res, base_mscale_formula, base_mscale_coefficient, h_energy_profile, mscale_spread, mscale_alpha, mscale_beta, mscale_min)
-    w_effective_mscale, w_spatial_freqs = compute_effective_mscale(class_obj.dim_spatial_range.to(device=device), w_ntk_factor, target_res, training_res, base_mscale_formula, base_mscale_coefficient, w_energy_profile, mscale_spread, mscale_alpha, mscale_beta, mscale_min)
-    t_effective_mscale, temporal_freqs = compute_effective_mscale(class_obj.dim_temporal_range.to(device=device), t_ntk_factor, target_res, training_res, base_mscale_formula, base_mscale_coefficient, t_energy_profile, mscale_spread, mscale_alpha, mscale_beta, mscale_min)
-
-    B, T, H, W, _ = B_T_H_W_C.shape
-    seq = torch.arange(max(H, W, T), dtype=torch.float, device=device)
-    uniform_fps = (fps is None) or isinstance(fps, (int, float)) or (fps.min() == fps.max())
-    assert (
-        uniform_fps or B == 1 or T == 1
-    ), "For video batch, batch size should be 1 for non-uniform fps. For image batch, T should be 1"
-    half_emb_h = torch.outer(seq[:H].to(device=device), h_spatial_freqs)
-    half_emb_w = torch.outer(seq[:W].to(device=device), w_spatial_freqs)
-
-    # apply sequence scaling in temporal dimension
-    if fps is None or class_obj.enable_fps_modulation is False:  # image case
-        half_emb_t = torch.outer(seq[:T].to(device=device), temporal_freqs)
-    else:
-        half_emb_t = torch.outer(seq[:T].to(device=device) / fps * class_obj.base_fps, temporal_freqs)
-
-    half_emb_h = torch.stack([torch.cos(half_emb_h), -torch.sin(half_emb_h), torch.sin(half_emb_h), torch.cos(half_emb_h)], dim=-1)
-    half_emb_w = torch.stack([torch.cos(half_emb_w), -torch.sin(half_emb_w), torch.sin(half_emb_w), torch.cos(half_emb_w)], dim=-1)
-    half_emb_t = torch.stack([torch.cos(half_emb_t), -torch.sin(half_emb_t), torch.sin(half_emb_t), torch.cos(half_emb_t)], dim=-1)
-
-    if debug & 0b10:
-        if isinstance(h_effective_mscale, torch.Tensor):
-            half_emb_h *= h_effective_mscale.unsqueeze(0).unsqueeze(2).repeat(1, 1, 4)
-        else:
-            half_emb_h *= h_effective_mscale
-    if debug & 0b100:
-        if isinstance(w_effective_mscale, torch.Tensor):
-            half_emb_w *= w_effective_mscale.unsqueeze(0).unsqueeze(2).repeat(1, 1, 4)
-        else:
-            half_emb_w *= w_effective_mscale
-    if debug & 0b1000:
-        if isinstance(t_effective_mscale, torch.Tensor):
-            half_emb_t *= t_effective_mscale.unsqueeze(0).unsqueeze(2).repeat(1, 1, 4)
-        else:
-            half_emb_t *= t_effective_mscale
-
-    em_T_H_W_D = torch.cat(
-        [
-            repeat(half_emb_t, "t d x -> t h w d x", h=H, w=W),
-            repeat(half_emb_h, "h d x -> t h w d x", t=T, w=W),
-            repeat(half_emb_w, "w d x -> t h w d x", t=T, h=H),
-        ]
-        , dim=-2,
-    )
-
-    return rearrange(em_T_H_W_D, "t h w d (i j) -> (t h w) d i j", i=2, j=2).float()    # rope_emb_L_1_1_D
 
 @torch.no_grad()
 def compute_axis_spectral_profiles(hidden_states, height, width, n_bins_h, n_bins_w):
@@ -666,6 +536,10 @@ def prepare_embedded_sequence(
             energy_profile_h, energy_profile_w = compute_axis_spectral_profiles(x_B_C_T_H_W, img_h, img_w, n_bins_h, n_bins_w)
             iso_profile = compute_spectral_energy_profile(x_B_C_T_H_W, img_h, img_w, max(img_h, img_w) // 2)
             dynamic_spread = compute_dynamic_spread(iso_profile, 0.0, 1.0, 1.5)
+        else:
+            energy_profile_h = None
+            energy_profile_w = None
+            dynamic_spread = None
 
         rope_emb_L_1_1_D = rope_embedder(
             x_B_T_H_W_D, 
@@ -682,156 +556,6 @@ def prepare_embedded_sequence(
     x_B_T_H_W_D = x_B_T_H_W_D + class_obj.pos_embedder(x_B_T_H_W_D, device=x_B_C_T_H_W.device)  # [B, T, H, W, D]
 
     return x_B_T_H_W_D, None, extra_pos_emb
-
-def File_x_SEGA_Anima_wrapper_forward_old(
-    class_obj: MiniTrainDIT,
-    x: torch.Tensor,
-    timesteps: torch.Tensor,
-    context: torch.Tensor,
-    fps: Optional[torch.Tensor] = None,
-    padding_mask: Optional[torch.Tensor] = None,
-    **kwargs,
-    ):
-
-    orig_shape = list(x.shape)  # [2, 16, 1, 114, 114] at 912 * 912
-    x = comfy.ldm.common_dit.pad_to_patch_size(x, (class_obj.patch_temporal, class_obj.patch_spatial, class_obj.patch_spatial))
-    x_B_C_T_H_W = x # [2, 16, 1, 114, 114] at 912 * 912
-    timesteps_B_T = timesteps
-    crossattn_emb = context
-    transformer_options: dict = kwargs.get("transformer_options", {})
-    """
-    Args:
-        x: (B, C, T, H, W) tensor of spatial-temp inputs
-        timesteps: (B, ) tensor of timesteps
-        crossattn_emb: (B, N, D) tensor of cross-attention embeddings
-    """
-
-    state: dict = transformer_options.get(File_x_SEGA_Anima_state, None)
-    if state is None:
-        raise RuntimeError("Failed to pass parameters to internal function.")
-    training_resolution = state.get("training_resolution", 1024)
-    base_mscale_formula = state.get("base_mscale_formula", "power_res")
-    base_mscale_coefficient = state.get("base_mscale_coefficient", 0.08)
-    mscale_alpha = state.get("mscale_alpha", 0.15)
-    mscale_beta = state.get("mscale_beta", 1.5)
-    mscale_min = state.get("mscale_min", 1.0)
-    debug = state.get("debug", 0b0)
-
-    patch_size = 2 if debug & 0b1_0000 else 1
-    max_h = x.shape[-2]
-    max_w = x.shape[-1]
-    target_resolution = x_B_C_T_H_W.shape[-2] * patch_size* 8 * x_B_C_T_H_W.shape[-1] * patch_size* 8
-    s = target_resolution / (training_resolution ** 2)
-    head_dim = class_obj.model_channels // class_obj.num_heads
-    dim_h = head_dim // 6 * 2
-    dim_w = dim_h
-    dim_t = head_dim - 2 * dim_h
-    assert head_dim == dim_h + dim_w + dim_t, f"bad dim: {head_dim} != {dim_h} + {dim_w} + {dim_t}"
-    axes_dims_rope = (dim_t, dim_h, dim_w)
-    rope_spatial_dim = axes_dims_rope[1]
-    d = rope_spatial_dim
-    d_multiplier = 1 if debug & 0b10_0000 else 2
-    if debug & 0b1: # True is correct
-        current_ntk_factor = s ** (d_multiplier * d / (d - 2)) / (1 + 0.1 * math.log(s))
-    else:
-        current_ntk_factor = s ** (d_multiplier * d / (d - 2)) / (1 + math.log(s))
-
-    dynamic_spread = None
-    energy_profile_h = None
-    energy_profile_w = None
-    energy_profile_t = None
-
-    divider = 2 if debug & 0b100_0000 else 1
-    n_bins_divider = 1 if debug & 0b1000_0000 else 2
-
-    if current_ntk_factor > 1.0:
-        n_spatial = x.shape[-2] * x.shape[-1]
-        if max_h * max_w == n_spatial:
-            img_h, img_w = max_h, max_w
-        else:
-            aspect = max_h / max_w
-            img_w = int(math.sqrt(n_spatial / aspect))
-            img_h = n_spatial // max(1, img_w)
-
-        n_bins_h = max(img_h // divider, 8)
-        n_bins_w = max(img_w // divider, 8)
-        energy_profile_h, energy_profile_w = compute_axis_spectral_profiles(
-            x, img_h, img_w, n_bins_h, n_bins_w,
-        )
-        iso_profile = compute_spectral_energy_profile(
-            x, img_h, img_w, n_bins=max(img_h, img_w) // n_bins_divider,
-        )
-        dynamic_spread = compute_dynamic_spread(
-            iso_profile,
-            spread_min=0.0,  # class_obj.spread_min
-            spread_max=1.0,  # class_obj.spread_max
-            alpha=1.5,  # class_obj.spread_alpha
-        )
-
-    x_B_T_H_W_D, rope_emb_L_1_1_D, extra_pos_emb_B_T_H_W_D_or_T_H_W_B_D = prepare_embedded_sequence(
-        class_obj = class_obj,
-        x_B_C_T_H_W = x_B_C_T_H_W,
-        fps = fps,
-        padding_mask = padding_mask,
-        h_ntk_factor = current_ntk_factor,
-        w_ntk_factor = current_ntk_factor, 
-        t_ntk_factor = current_ntk_factor, 
-        target_res = target_resolution,
-        training_res = training_resolution,
-        base_mscale_formula = base_mscale_formula,
-        base_mscale_coefficient = base_mscale_coefficient,
-        h_energy_profile = energy_profile_h,
-        w_energy_profile = energy_profile_w,
-        t_energy_profile = energy_profile_t,
-        mscale_spread = dynamic_spread,
-        mscale_alpha = mscale_alpha,
-        mscale_beta = mscale_beta,
-        mscale_min = mscale_min,
-        debug = debug,
-    )
-
-    if timesteps_B_T.ndim == 1:
-        timesteps_B_T = timesteps_B_T.unsqueeze(1)
-    t_embedding_B_T_D, adaln_lora_B_T_3D = class_obj.t_embedder[1](class_obj.t_embedder[0](timesteps_B_T).to(x_B_T_H_W_D.dtype))
-    t_embedding_B_T_D = class_obj.t_embedding_norm(t_embedding_B_T_D)
-
-    # for logging purpose
-    affline_scale_log_info = {}
-    affline_scale_log_info["t_embedding_B_T_D"] = t_embedding_B_T_D.detach()
-    class_obj.affline_scale_log_info = affline_scale_log_info
-    class_obj.affline_emb = t_embedding_B_T_D
-    class_obj.crossattn_emb = crossattn_emb
-
-    if extra_pos_emb_B_T_H_W_D_or_T_H_W_B_D is not None:
-        assert (
-            x_B_T_H_W_D.shape == extra_pos_emb_B_T_H_W_D_or_T_H_W_B_D.shape
-        ), f"{x_B_T_H_W_D.shape} != {extra_pos_emb_B_T_H_W_D_or_T_H_W_B_D.shape}"
-
-    block_kwargs = {
-        "rope_emb_L_1_1_D": rope_emb_L_1_1_D.unsqueeze(1).unsqueeze(0),
-        "adaln_lora_B_T_3D": adaln_lora_B_T_3D,
-        "extra_per_block_pos_emb": extra_pos_emb_B_T_H_W_D_or_T_H_W_B_D,
-        "transformer_options": kwargs.get("transformer_options", {}),
-    }
-
-    # The residual stream for this model has large values. To make fp16 compute_dtype work, we keep the residual stream
-    # in fp32, but run attention and MLP modules in fp16.
-    # An alternate method that clamps fp16 values "works" in the sense that it makes coherent images, but there is noticeable
-    # quality degradation and visual artifacts.
-    if x_B_T_H_W_D.dtype == torch.float16:
-        x_B_T_H_W_D = x_B_T_H_W_D.float()
-
-    for block in class_obj.blocks:
-        x_B_T_H_W_D = block(
-            x_B_T_H_W_D,
-            t_embedding_B_T_D,
-            crossattn_emb,
-            **block_kwargs,
-        )
-
-    x_B_T_H_W_O = class_obj.final_layer(x_B_T_H_W_D.to(crossattn_emb.dtype), t_embedding_B_T_D, adaln_lora_B_T_3D=adaln_lora_B_T_3D)
-    x_B_C_Tt_Hp_Wp = class_obj.unpatchify(x_B_T_H_W_O)[:, :, :orig_shape[-3], :orig_shape[-2], :orig_shape[-1]]
-    return x_B_C_Tt_Hp_Wp
 
 def File_x_SEGA_Anima_wrapper_forward(
         class_obj: MiniTrainDIT,
@@ -923,7 +647,7 @@ class File_x_SEGA_Anima_(io.ComfyNode):
                                  io.Float.Input(id="mscale_alpha", default=0.15, min=-100.000, max=100.000, step=0.001),
                                  io.Float.Input(id="mscale_beta", default=1.5, min=-100.000, max=100.000, step=0.001),
                                  io.Float.Input(id="mscale_min", default=1.0, min=-100.000, max=100.000, step=0.001),
-                                 io.Int.Input(id="debug", default=0b0, min=0, max=0b111_1111_1111, step=1, advanced=True),],
+                                 io.Int.Input(id="debug", default=0b0, min=0, max=0b1111_1111_1111_1111, step=1, advanced=True),],
                          outputs=[io.Model.Output(id=None),],)
     
     @classmethod
