@@ -468,8 +468,8 @@ def prepare_embedded_sequence(
         training_resolution_h: int = state.get("training_resolution_h", 1024)
         training_resolution_w: int = state.get("training_resolution_w", 1024)
         debug: int = state.get("debug", 0)
-        d_mul: float = state.get("debug", 0)
-        log_s_mul: float = state.get("debug", 0)
+        d_mul: float = state.get("d_mul", 2.0)
+        log_s_mul: float = state.get("log_s_mul", 0.1)
         axes_dims_rope: tuple[int, int, int] = state.get("axes_dims_rope", (44, 42, 42))
         rope_embedder: File_x_SEGA_Anima_RoPE = state.get("RoPE_Embedder", None)
         
@@ -609,7 +609,7 @@ class File_x_SEGA_Anima_(io.ComfyNode):
                          category="SEGA/Anima",
                          inputs=[io.Model.Input(id="model"),
                                  io.Int.Input(id="training_resolution", default=1024, min=1, max=65536, step=1),
-                                 io.Float.Input(id="theta", default=10000.0, min=-100000.0, max=100000.0, step=0.001),
+                                 io.Float.Input(id="theta", default=10000.0, min=10.0, max=1000000.0, step=10.0),
                                  io.Combo.Input(id="base_mscale_formula", options=["power_res", "log_res"], default="power_res"),
                                  io.Float.Input(id="base_mscale_coefficient", default=0.08, min=-100.000, max=100.000, step=0.001),
                                  io.Float.Input(id="mscale_alpha", default=0.15, min=-100.000, max=100.000, step=0.001),
