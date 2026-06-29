@@ -4,7 +4,9 @@ SEGA anima is implementation of ["SEGA: Spectral-Energy Guided Attention for Res
 
 ## What should I do when output image is bad
 
-1. First thing you should to do is increasing CFG. If you could not find good CFG, come back later.
-2. Reduce "training_resolution" if image does not appear. Too low "training_resolution" results structual inaccuracy. In that case, increase "training_resolution" or go to next step.
-3. You may increase "theta" or "base_mscale_coefficient" or "d_mul".
-4. Creator of the this node does not know what rest of parameters do. You may do experience with those.
+- Decrease "training_resolution" if image does not appear. Too low "training_resolution" results structual inaccuracy.
+- Adjust CFG. Normally, higher CFG is needed for high resolution output.
+- You may increase "theta" or "base_mscale_coefficient" or "d_mul".
+- You may decrease "mscale_alpha".
+- Creator of the this node does not know what rest of parameters do. You may do experience with those.
+- If changing none of above work, Increasing steps may work.
