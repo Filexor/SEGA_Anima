@@ -15,10 +15,13 @@ Click green "\<\> Code ▾" button and then click "Download ZIP" and extract fol
 
 ### Via ComfyUI Manager
 
-This method is currently unavailable.
+1. Open ComfyUI Manager and click "Custom Nodes Manager".
+2. Find "SEGA for Anima" and install it.
+
 
 ## Usage
 
+You can find "SEGA for Anima" node in "Add node" -\> "model" -\> "patch" -\> "anima"
 Insert "SEGA for Anima" node to between "Load Diffusion Model" node and "KSampler" node.
 
 ### What should I do when output image is bad
