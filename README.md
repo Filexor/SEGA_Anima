@@ -1,4 +1,4 @@
-# SEGA Anima
+# SEGA for Anima
 
 SEGA anima is implementation of ["SEGA: Spectral-Energy Guided Attention for Resolution Extrapolation in Diffusion Transformers" (arXiv:2605.22668)](https://arxiv.org/abs/2605.22668) for Anima model in ComfyUI.
 
@@ -19,7 +19,7 @@ This method is currently unavailable.
 
 ## Usage
 
-Insert "SEGA Anima" node to between "Load Diffusion Model" node and "KSampler" node.
+Insert "SEGA for Anima" node to between "Load Diffusion Model" node and "KSampler" node.
 
 ### What should I do when output image is bad
 

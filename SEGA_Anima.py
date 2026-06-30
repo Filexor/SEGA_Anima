@@ -605,7 +605,7 @@ class File_x_SEGA_Anima_(io.ComfyNode):
     @classmethod
     def define_schema(cls):
         return io.Schema(node_id="File_x SEGA Anima",
-                         display_name="SEGA Anima",
+                         display_name="SEGA for Anima",
                          category="model/patch/anima",
                          inputs=[io.Model.Input(id="model"),
                                  io.Int.Input(id="training_resolution", default=1024, min=1, max=65536, step=1),
